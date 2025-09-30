@@ -1,6 +1,6 @@
 # mini_torch
 
-A minimal NumPy-based PyTorch-like deep learning framework designed for **educational purposes**.  
+A minimal NumPy-based deep learning framework designed for **educational purposes**.  
 It provides autograd, basic modules, optimizers, and commonly used activation and loss functions.
 
 ---
