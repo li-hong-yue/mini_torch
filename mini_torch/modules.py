@@ -40,3 +40,103 @@ class Linear(Module):
     
     def forward(self, x):
         return x @ self.W + self.b
+
+class Conv2D(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
+        
+        # Initialize weights: (out_channels, in_channels, kernel_h, kernel_w)
+        k_h, k_w = self.kernel_size
+        self.W = Tensor(np.random.randn(out_channels, in_channels, k_h, k_w) * 
+                       np.sqrt(2.0 / (in_channels * k_h * k_w)))
+        self.b = Tensor(np.zeros(out_channels))
+    
+    def forward(self, x):
+        # x shape: (batch, in_channels, H, W)
+        batch, in_c, H, W = x.shape
+        k_h, k_w = self.kernel_size
+        s_h, s_w = self.stride
+        
+        # Calculate output dimensions
+        out_h = (H - k_h) // s_h + 1
+        out_w = (W - k_w) // s_w + 1
+        
+        # Create output tensor using im2col approach
+        # This is more efficient and easier for backprop
+        cols = self._im2col(x.data, k_h, k_w, s_h, s_w)
+        # cols shape: (batch * out_h * out_w, in_channels * k_h * k_w)
+        
+        # Reshape weights for matrix multiplication
+        W_col = self.W.data.reshape(self.out_channels, -1).T
+        # W_col shape: (in_channels * k_h * k_w, out_channels)
+        
+        # Perform convolution as matrix multiplication
+        out_data = np.matmul(cols, W_col) + self.b.data
+        # out_data shape: (batch * out_h * out_w, out_channels)
+        
+        # Reshape to proper output format
+        out_data = out_data.reshape(batch, out_h, out_w, self.out_channels)
+        out_data = out_data.transpose(0, 3, 1, 2)
+        # out_data shape: (batch, out_channels, out_h, out_w)
+        
+        out = Tensor(out_data, (x, self.W, self.b), op="conv2d")
+        
+        def _backward():
+            # Gradient w.r.t output: (batch, out_channels, out_h, out_w)
+            grad_out = out.grad.transpose(0, 2, 3, 1).reshape(batch * out_h * out_w, self.out_channels)
+            
+            # Gradient w.r.t weights
+            grad_W = np.matmul(cols.T, grad_out)
+            grad_W = grad_W.T.reshape(self.W.shape)
+            self.W.grad += grad_W
+            
+            # Gradient w.r.t bias
+            grad_b = grad_out.sum(axis=0)
+            self.b.grad += grad_b
+            
+            # Gradient w.r.t input
+            grad_cols = np.matmul(grad_out, W_col.T)
+            grad_x = self._col2im(grad_cols, x.shape, k_h, k_w, s_h, s_w)
+            x.grad += grad_x
+        
+        out._backward = _backward
+        return out
+    
+    def _im2col(self, x, k_h, k_w, s_h, s_w):
+        """Convert image to column matrix for efficient convolution."""
+        batch, in_c, H, W = x.shape
+        out_h = (H - k_h) // s_h + 1
+        out_w = (W - k_w) // s_w + 1
+        
+        cols = np.zeros((batch, in_c, k_h, k_w, out_h, out_w))
+        
+        for y in range(k_h):
+            y_max = y + s_h * out_h
+            for x_idx in range(k_w):
+                x_max = x_idx + s_w * out_w
+                cols[:, :, y, x_idx, :, :] = x[:, :, y:y_max:s_h, x_idx:x_max:s_w]
+        
+        cols = cols.transpose(0, 4, 5, 1, 2, 3).reshape(batch * out_h * out_w, -1)
+        return cols
+    
+    def _col2im(self, cols, x_shape, k_h, k_w, s_h, s_w):
+        """Convert column matrix back to image for backpropagation."""
+        batch, in_c, H, W = x_shape
+        out_h = (H - k_h) // s_h + 1
+        out_w = (W - k_w) // s_w + 1
+        
+        cols = cols.reshape(batch, out_h, out_w, in_c, k_h, k_w).transpose(0, 3, 4, 5, 1, 2)
+        
+        x_grad = np.zeros(x_shape)
+        
+        for y in range(k_h):
+            y_max = y + s_h * out_h
+            for x_idx in range(k_w):
+                x_max = x_idx + s_w * out_w
+                x_grad[:, :, y:y_max:s_h, x_idx:x_max:s_w] += cols[:, :, y, x_idx, :, :]
+        
+        return x_grad
