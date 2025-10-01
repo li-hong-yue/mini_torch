@@ -75,3 +75,74 @@ def cross_entropy(logits: Tensor, targets: np.ndarray):
     
     loss._backward = _backward
     return loss
+
+
+def binary_cross_entropy(pred: Tensor, target: Tensor, epsilon=1e-8, reduction='sum'):
+    """
+    Binary cross entropy loss.
+    BCE = -[target*log(pred) + (1-target)*log(1-pred)]
+    
+    pred: Tensor of predicted probabilities (should be in [0, 1])
+    target: Tensor of ground truth (should be in [0, 1])
+    epsilon: small value to avoid log(0)
+    """
+    # Clip predictions to avoid log(0)
+    pred_clipped = np.clip(pred.data, epsilon, 1 - epsilon)
+    
+    # Compute BCE
+    bce_data = -(target.data * np.log(pred_clipped) + 
+                 (1 - target.data) * np.log(1 - pred_clipped))
+    if reduction == 'sum':
+        loss_val = bce_data.sum()
+    else:
+        assert reduction == 'mean'
+        loss_val = bce_data.mean()
+    
+    out = Tensor(loss_val, (pred, target), op="bce")
+    
+    def _backward():
+        # Gradient w.r.t pred: -(target/pred - (1-target)/(1-pred)) / batch_size
+        batch_size = np.prod(pred.data.shape)
+        grad_pred = -(target.data / pred_clipped - (1 - target.data) / (1 - pred_clipped))
+        pred.grad += grad_pred * out.grad #/ batch_size
+        
+        # Gradient w.r.t target (usually not needed, but for completeness)
+        grad_target = -np.log(pred_clipped) + np.log(1 - pred_clipped)
+
+        if reduction == 'sum':
+            pred.grad += grad_pred * out.grad 
+            target.grad += grad_target * out.grad 
+        else:
+            assert reduction == 'mean'
+            pred.grad += grad_pred * out.grad / batch_size
+            target.grad += grad_target * out.grad / batch_size
+    
+    out._backward = _backward
+    return out
+
+def sum(x: Tensor, axis=None, keepdims=False):
+    """
+    Sum reduction along specified axis.
+    
+    x: Tensor to sum
+    axis: axis or axes to sum over (None means sum all)
+    keepdims: whether to keep the reduced dimensions
+    """
+    out_data = np.sum(x.data, axis=axis, keepdims=keepdims)
+    out = Tensor(out_data, (x,), op="sum")
+    
+    def _backward():
+        if axis is None:
+            # Sum over all dimensions - broadcast to original shape
+            x.grad += np.ones_like(x.data) * out.grad
+        else:
+            # Sum over specific axis - need to broadcast gradient back
+            if keepdims:
+                x.grad += np.broadcast_to(out.grad, x.shape)
+            else:
+                # Expand dims to match original shape
+                grad_expanded = np.expand_dims(out.grad, axis=axis)
+                x.grad += np.broadcast_to(grad_expanded, x.shape)
+    
+    out._backward = _backward
+    return out

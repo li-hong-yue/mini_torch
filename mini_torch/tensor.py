@@ -110,11 +110,42 @@ class Tensor:
             self.grad += out.grad * np.ones_like(self.data) / self.data.size
         out._backward = _backward
         return out
+    
+    def sum(self, axis=None, keepdims=False):
+        out = Tensor(self.data.sum(axis=axis, keepdims=keepdims), (self,), op="sum")
+
+        def _backward():
+            # The gradient of sum is just broadcasted ones
+            grad = out.grad
+            if axis is None:
+                grad = np.ones_like(self.data) * grad
+            else:
+                # Expand grad to the input shape
+                grad = np.broadcast_to(grad, self.data.shape)
+            self.grad += grad
+
+        out._backward = _backward
+        return out
+
 
     def pow(self, power):
         out = Tensor(self.data ** power, (self,), op=f"**{power}")
         def _backward():
             self.grad += (power * self.data ** (power - 1)) * out.grad
+        out._backward = _backward
+        return out
+    
+    def exp(self):
+        """
+        Element-wise exponential function.
+        Returns e^x for each element in the tensor.
+        """
+        out = Tensor(np.exp(self.data), (self,), op="exp")
+        
+        def _backward():
+            # d/dx(e^x) = e^x
+            self.grad += out.grad * out.data
+        
         out._backward = _backward
         return out
 
