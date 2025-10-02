@@ -1,7 +1,6 @@
 # mini_torch/modules.py
 import numpy as np
 from .tensor import Tensor
-from .functions import sigmoid
 
 
 class Module:
